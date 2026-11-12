@@ -54,11 +54,7 @@ module cnn_accelerator_top #(
     output wire                          interrupt
 );
 
-    wire rst_sync = (~aresetn) | reg_reset;
-    wire core_done;
-    assign interrupt = core_done;
-
-    // Decoded control signals
+    // Decoded control signals from AXI-Lite
     wire        reg_start;
     wire        reg_reset;
     wire [10:0] reg_img_w;
@@ -70,23 +66,27 @@ module cnn_accelerator_top #(
     wire        reg_relu_en;
     wire [1:0]  reg_mode;
 
+    wire rst_sync = (~aresetn) | reg_reset;
+    wire core_done;
+    assign interrupt = core_done;
+
+    // 3x3 Filter Weights and Bias from AXI-Lite
+    wire [31:0] reg_w1, reg_w2, reg_w3;
+    wire [31:0] reg_w4, reg_w5, reg_w6;
+    wire [31:0] reg_w7, reg_w8, reg_w9;
+    wire [31:0] reg_bias;
+
     // 32-bit internal stream
     wire [31:0] stream_32_data;
     wire        stream_32_valid;
     wire        stream_32_ready;
     wire        stream_32_last;
 
-    // Window taps
+    // Window taps from line buffer
     wire [31:0] tap_i1, tap_i2, tap_i3;
     wire [31:0] tap_i4, tap_i5, tap_i6;
     wire [31:0] tap_i7, tap_i8, tap_i9;
     wire        win_valid;
-
-    // Weight registers
-    reg  [31:0] w_reg1, w_reg2, w_reg3;
-    reg  [31:0] w_reg4, w_reg5, w_reg6;
-    reg  [31:0] w_reg7, w_reg8, w_reg9;
-    reg  [31:0] bias_reg;
 
     // Compute outputs
     wire [31:0] mac_sum;
@@ -95,8 +95,41 @@ module cnn_accelerator_top #(
     wire [31:0] accum_data;
     wire        accum_valid;
 
-    reg  [11:0] c_idx;
+    // Channel & spatial coordinates for Accumulator
+    wire [10:0] cur_img_w = (reg_img_w > 0) ? reg_img_w : 11'd224;
+    wire [10:0] cur_img_h = (reg_img_h > 0) ? reg_img_h : 11'd224;
+
+    reg  [10:0] px_x;
+    reg  [10:0] px_y;
     reg  [15:0] px_addr;
+    reg  [11:0] c_idx;
+
+    always @(posedge aclk) begin
+        if (rst_sync) begin
+            px_x    <= 11'd0;
+            px_y    <= 11'd0;
+            px_addr <= 16'd0;
+            c_idx   <= 12'd0;
+        end else if (mac_valid) begin
+            if (px_x == cur_img_w - 1'b1) begin
+                px_x <= 11'd0;
+                if (px_y == cur_img_h - 1'b1) begin
+                    px_y    <= 11'd0;
+                    px_addr <= 16'd0;
+                    if (c_idx == reg_cin - 1'b1)
+                        c_idx <= 12'd0;
+                    else
+                        c_idx <= c_idx + 1'b1;
+                end else begin
+                    px_y    <= px_y + 1'b1;
+                    px_addr <= px_addr + 1'b1;
+                end
+            end else begin
+                px_x    <= px_x + 1'b1;
+                px_addr <= px_addr + 1'b1;
+            end
+        end
+    end
 
     wire [31:0] act_pool_data;
     wire        act_pool_valid;
@@ -107,6 +140,42 @@ module cnn_accelerator_top #(
     wire [31:0] final_out_data  = (reg_mode == 2'b10) ? fc_out_data : act_pool_data;
     wire        final_out_valid = (reg_mode == 2'b10) ? fc_out_valid : act_pool_valid;
     wire        final_out_ready;
+
+    // Target output dimensions & TLAST generation
+    wire [10:0] out_dim_w = reg_pool_en ? (cur_img_w >> 1) : cur_img_w;
+    wire [10:0] out_dim_h = reg_pool_en ? (cur_img_h >> 1) : cur_img_h;
+
+    reg  [10:0] out_px_x;
+    reg  [10:0] out_px_y;
+    reg         core_done_reg;
+
+    wire is_last_output_pixel = (out_px_x == out_dim_w - 1'b1) && (out_px_y == out_dim_h - 1'b1);
+    wire out_tlast_comb       = final_out_valid && is_last_output_pixel;
+
+    assign core_done = core_done_reg;
+
+    always @(posedge aclk) begin
+        if (rst_sync) begin
+            out_px_x      <= 11'd0;
+            out_px_y      <= 11'd0;
+            core_done_reg <= 1'b0;
+        end else begin
+            core_done_reg <= 1'b0;
+            if (final_out_valid) begin
+                if (out_px_x == out_dim_w - 1'b1) begin
+                    out_px_x <= 11'd0;
+                    if (out_px_y == out_dim_h - 1'b1) begin
+                        out_px_y      <= 11'd0;
+                        core_done_reg <= 1'b1;
+                    end else begin
+                        out_px_y <= out_px_y + 1'b1;
+                    end
+                end else begin
+                    out_px_x <= out_px_x + 1'b1;
+                end
+            end
+        end
+    end
 
     // 1. AXI-Lite Slave Registers
     axi_lite_regs #(
@@ -143,6 +212,12 @@ module cnn_accelerator_top #(
         .reg_pool_en(reg_pool_en),
         .reg_relu_en(reg_relu_en),
         .reg_mode(reg_mode),
+
+        .reg_w1(reg_w1), .reg_w2(reg_w2), .reg_w3(reg_w3),
+        .reg_w4(reg_w4), .reg_w5(reg_w5), .reg_w6(reg_w6),
+        .reg_w7(reg_w7), .reg_w8(reg_w8), .reg_w9(reg_w9),
+        .reg_bias(reg_bias),
+
         .core_done(core_done)
     );
 
@@ -167,7 +242,7 @@ module cnn_accelerator_top #(
     ) u_line_buffer (
         .clk(aclk),
         .rst(rst_sync),
-        .line_width(reg_img_w),
+        .line_width(cur_img_w),
         .padding_en(reg_pad_en),
         .in_data(stream_32_data),
         .in_valid(stream_32_valid),
@@ -188,9 +263,9 @@ module cnn_accelerator_top #(
         .i1(tap_i1), .i2(tap_i2), .i3(tap_i3),
         .i4(tap_i4), .i5(tap_i5), .i6(tap_i6),
         .i7(tap_i7), .i8(tap_i8), .i9(tap_i9),
-        .w1(w_reg1), .w2(w_reg2), .w3(w_reg3),
-        .w4(w_reg4), .w5(w_reg5), .w6(w_reg6),
-        .w7(w_reg7), .w8(w_reg8), .w9(w_reg9),
+        .w1(reg_w1), .w2(reg_w2), .w3(reg_w3),
+        .w4(reg_w4), .w5(reg_w5), .w6(reg_w6),
+        .w7(reg_w7), .w8(reg_w8), .w9(reg_w9),
         .sum_out(mac_sum),
         .out_valid(mac_valid)
     );
@@ -198,7 +273,7 @@ module cnn_accelerator_top #(
     // 5. Inter-Channel Accumulator
     accumulator #(
         .DATA_WIDTH(32),
-        .MAX_SPATIAL_DIM(50176)
+        .MAX_SPATIAL_DIM(4096)
     ) u_accumulator (
         .clk(aclk),
         .rst(rst_sync),
@@ -206,7 +281,7 @@ module cnn_accelerator_top #(
         .conv_valid_in(mac_valid),
         .c_in_idx(c_idx),
         .cin_total(reg_cin),
-        .bias_in(bias_reg),
+        .bias_in(reg_bias),
         .pixel_addr(px_addr),
         .accum_out(accum_data),
         .accum_valid(accum_valid)
@@ -220,7 +295,7 @@ module cnn_accelerator_top #(
         .clk(aclk),
         .rst(rst_sync),
         .pool_en(reg_pool_en),
-        .line_width(reg_img_w),
+        .line_width(cur_img_w),
         .in_data(accum_data),
         .in_valid(accum_valid),
         .out_data(act_pool_data),
@@ -236,7 +311,7 @@ module cnn_accelerator_top #(
         .rst(rst_sync),
         .start(reg_start),
         .vec_len(13'd4096),
-        .bias_in(bias_reg),
+        .bias_in(reg_bias),
         .relu_en(reg_relu_en),
         .act_in(stream_32_data),
         .act_valid(stream_32_valid),
@@ -253,7 +328,7 @@ module cnn_accelerator_top #(
         .s_axis_tdata(final_out_data),
         .s_axis_tvalid(final_out_valid),
         .s_axis_tready(final_out_ready),
-        .s_axis_tlast(stream_32_last),
+        .s_axis_tlast(out_tlast_comb),
         .m_axis_tdata(m_axis_tdata),
         .m_axis_tvalid(m_axis_tvalid),
         .m_axis_tready(m_axis_tready),

@@ -12,7 +12,7 @@
 
 module accumulator #(
     parameter DATA_WIDTH      = 32,
-    parameter MAX_SPATIAL_DIM = 50176 // 224 x 224
+    parameter MAX_SPATIAL_DIM = 4096 // Up to 64x64 spatial tile
 )(
     input  wire                   clk,
     input  wire                   rst,
@@ -33,7 +33,7 @@ module accumulator #(
 );
 
     // On-chip partial-sum Block RAM (inferred into Zynq-7020 BRAM36 blocks)
-    reg [DATA_WIDTH-1:0] psum_ram [0:MAX_SPATIAL_DIM-1];
+    (* ram_style = "block" *) reg [DATA_WIDTH-1:0] psum_ram [0:MAX_SPATIAL_DIM-1];
 
     wire signed [31:0] s_conv = conv_sum_in;
     wire signed [31:0] s_bias = bias_in;

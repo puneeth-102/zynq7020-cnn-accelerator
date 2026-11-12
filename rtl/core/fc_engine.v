@@ -37,7 +37,7 @@ module fc_engine #(
 );
 
     // On-chip BRAM to store the activation vector x
-    reg [DATA_WIDTH-1:0] act_ram [0:MAX_INPUT_NODES-1];
+    (* ram_style = "block" *) reg [DATA_WIDTH-1:0] act_ram [0:MAX_INPUT_NODES-1];
 
     reg [12:0] act_wr_ptr;
     reg [12:0] act_rd_ptr;

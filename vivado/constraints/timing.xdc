@@ -2,9 +2,16 @@
 # Sourced from Section 5 of:
 # "FPGA-Based CNN Acceleration on Zynq-7020 for Embedded Ship Recognition"
 # (Sensors 2026, 26, 1626)
+# Target: ZedBoard xc7z020clg484-1 @ 100 MHz
 
-# 100 MHz PL Clock Period = 10.0 ns
-create_clock -period 10.000 -name aclk -waveform {0.000 5.000} [get_ports aclk]
+# Note: In the full PS+PL Block Design, 100 MHz clock (10.0 ns) is automatically
+# propagated from Zynq PS7 FCLK_CLK0 (clk_fpga_0).
+# The constraint below is active for standalone out-of-context synthesis.
 
-# Set false paths on asynchronous resets if needed
-set_false_path -through [get_ports aresetn]
+if {[llength [get_ports -quiet aclk]] > 0} {
+    create_clock -period 10.000 -name aclk -waveform {0.000 5.000} [get_ports aclk]
+}
+
+if {[llength [get_ports -quiet aresetn]] > 0} {
+    set_false_path -through [get_ports aresetn]
+}
