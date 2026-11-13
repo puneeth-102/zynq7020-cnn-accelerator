@@ -15,3 +15,6 @@ if {[llength [get_ports -quiet aclk]] > 0} {
 if {[llength [get_ports -quiet aresetn]] > 0} {
     set_false_path -through [get_ports aresetn]
 }
+
+# Static configuration registers (written once by CPU prior to DMA streaming)
+set_false_path -from [get_cells -hier -filter {NAME =~ *u_axi_lite/slv_reg* && IS_PRIMITIVE}]

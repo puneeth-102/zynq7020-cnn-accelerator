@@ -46,6 +46,10 @@ module mac_tree_9x #(
     wire signed [31:0] s_w4 = w4; wire signed [31:0] s_w5 = w5; wire signed [31:0] s_w6 = w6;
     wire signed [31:0] s_w7 = w7; wire signed [31:0] s_w8 = w8; wire signed [31:0] s_w9 = w9;
 
+    // Registered inputs to absorb into DSP48E1 AREG/BREG pipeline stages
+    reg signed [31:0] r_i1, r_i2, r_i3, r_i4, r_i5, r_i6, r_i7, r_i8, r_i9;
+    reg signed [31:0] r_w1, r_w2, r_w3, r_w4, r_w5, r_w6, r_w7, r_w8, r_w9;
+
     // Stage 0: 9 Parallel Multipliers (64-bit Q30.32 products)
     // (* use_dsp = "yes" *) forces Vivado to use 4 DSP48E1 slices per 32x32 multiplier = 36 DSPs!
     (* use_dsp = "yes" *) reg signed [63:0] p1, p2, p3, p4, p5, p6, p7, p8, p9;
@@ -59,8 +63,8 @@ module mac_tree_9x #(
     // Stage 3: Adder Tree Level 3 (68 bits)
     reg signed [67:0] sum_8taps, total_sum;
 
-    // Valid tracking pipeline (4 clock cycles delay)
-    reg [3:0] valid_pipe;
+    // Valid tracking pipeline (5 clock cycles delay: input reg + mult + 3 adders)
+    reg [4:0] valid_pipe;
 
     localparam signed [67:0] ROUND_CONST = 68'sd32768; // 2^15
 
@@ -68,6 +72,8 @@ module mac_tree_9x #(
 
     always @(posedge clk) begin
         if (rst) begin
+            r_i1 <= 0; r_i2 <= 0; r_i3 <= 0; r_i4 <= 0; r_i5 <= 0; r_i6 <= 0; r_i7 <= 0; r_i8 <= 0; r_i9 <= 0;
+            r_w1 <= 0; r_w2 <= 0; r_w3 <= 0; r_w4 <= 0; r_w5 <= 0; r_w6 <= 0; r_w7 <= 0; r_w8 <= 0; r_w9 <= 0;
             p1 <= 0; p2 <= 0; p3 <= 0; p4 <= 0; p5 <= 0; p6 <= 0; p7 <= 0; p8 <= 0; p9 <= 0;
             sum_12 <= 0; sum_34 <= 0; sum_56 <= 0; sum_78 <= 0; p9_d1 <= 0;
             sum_1234 <= 0; sum_5678 <= 0; p9_d2 <= 0;
@@ -76,18 +82,27 @@ module mac_tree_9x #(
             sum_out <= 0;
             out_valid <= 0;
         end else begin
-            valid_pipe <= {valid_pipe[2:0], in_valid};
+            valid_pipe <= {valid_pipe[3:0], in_valid};
+
+            // Input Register Stage (absorbs into DSP48E1 AREG/BREG)
+            r_i1 <= s_i1; r_i2 <= s_i2; r_i3 <= s_i3;
+            r_i4 <= s_i4; r_i5 <= s_i5; r_i6 <= s_i6;
+            r_i7 <= s_i7; r_i8 <= s_i8; r_i9 <= s_i9;
+
+            r_w1 <= s_w1; r_w2 <= s_w2; r_w3 <= s_w3;
+            r_w4 <= s_w4; r_w5 <= s_w5; r_w6 <= s_w6;
+            r_w7 <= s_w7; r_w8 <= s_w8; r_w9 <= s_w9;
 
             // Stage 0: Parallel Multiplications
-            p1 <= s_i1 * s_w1;
-            p2 <= s_i2 * s_w2;
-            p3 <= s_i3 * s_w3;
-            p4 <= s_i4 * s_w4;
-            p5 <= s_i5 * s_w5;
-            p6 <= s_i6 * s_w6;
-            p7 <= s_i7 * s_w7;
-            p8 <= s_i8 * s_w8;
-            p9 <= s_i9 * s_w9;
+            p1 <= r_i1 * r_w1;
+            p2 <= r_i2 * r_w2;
+            p3 <= r_i3 * r_w3;
+            p4 <= r_i4 * r_w4;
+            p5 <= r_i5 * r_w5;
+            p6 <= r_i6 * r_w6;
+            p7 <= r_i7 * r_w7;
+            p8 <= r_i8 * r_w8;
+            p9 <= r_i9 * r_w9;
 
             // Stage 1: Level 1 Pairwise Addition
             sum_12 <= p1 + p2;
@@ -115,7 +130,7 @@ module mac_tree_9x #(
             else
                 sum_out <= shifted[31:0];
 
-            out_valid <= valid_pipe[3];
+            out_valid <= valid_pipe[4];
         end
     end
 
